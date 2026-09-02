@@ -14,10 +14,8 @@ import sys
 import json
 import time
 import hashlib
-import threading
 import re
 import unicodedata
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
 from dotenv import load_dotenv
@@ -405,57 +403,10 @@ def enviar_whatsapp(mensagem: str, image_url: str = ""):
 
 
 # ===================== RENDER / UPTIMEROBOT =====================
-
-class HealthHandler(BaseHTTPRequestHandler):
-
-    def _responder_ok(self, corpo=True):
-        body = b"ShopeeBot OK"
-
-        self.send_response(200)
-        self.send_header(
-            "Content-Type",
-            "text/plain; charset=utf-8"
-        )
-        self.send_header(
-            "Content-Length",
-            str(len(body))
-        )
-        self.end_headers()
-
-        if corpo:
-            self.wfile.write(body)
-
-    def do_GET(self):
-        self._responder_ok(True)
-
-    def do_HEAD(self):
-        self._responder_ok(False)
-
-    def log_message(self, format, *args):
-        return
-
-
-def iniciar_servidor_http():
-    porta = int(os.getenv("PORT", "10000"))
-
-    servidor = ThreadingHTTPServer(
-        ("0.0.0.0", porta),
-        HealthHandler,
-    )
-
-    thread = threading.Thread(
-        target=servidor.serve_forever,
-        daemon=True,
-    )
-
-    thread.start()
-
-    print(
-        f"Servidor HTTP ativo na porta {porta} "
-        f"(health check: /)"
-    )
-
-    return servidor
+#
+# O health check e o QR code agora são servidos pelo server.js (Node),
+# que já ocupa a porta $PORT do Render. Manter um segundo servidor HTTP
+# aqui no Python causava "Address already in use" e crashava o serviço.
 
 
 # ===================== PROCESSAMENTO OTIMIZADO =====================
@@ -604,7 +555,6 @@ def rodar_continuamente():
 if __name__ == "__main__":
     checar_configuracao()
     carregar_historico_supabase()
-    iniciar_servidor_http()
 
     if "--loop" in sys.argv:
         rodar_continuamente()

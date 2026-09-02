@@ -6,6 +6,7 @@ const {
 
 const express = require("express");
 const qrcode = require("qrcode-terminal");
+const qrcodePng = require("qrcode");
 const pino = require("pino");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -30,6 +31,7 @@ let sock = null;
 let conectado = false;
 let backupTimer = null;
 let backupInProgress = false;
+let ultimoQR = null;
 
 function supabaseConfigurado() {
   return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
@@ -221,12 +223,14 @@ async function conectar() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log("\n📱 ESCANEIE O QR CODE NO WHATSAPP:\n");
+      ultimoQR = qr;
+      console.log("\n📱 ESCANEIE O QR CODE: abra /qr no navegador (o desenho no log fica ilegível).\n");
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === "open") {
       conectado = true;
+      ultimoQR = null;
       console.log("\n✅ WHATSAPP CONECTADO! Serviço pronto para receber pedidos de envio.");
       salvarSessaoNoSupabase();
     }
@@ -250,8 +254,34 @@ async function conectar() {
 const app = express();
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.type("text/plain").send("ShopeeBot OK");
+});
+
 app.get("/status", (req, res) => {
   res.json({ conectado });
+});
+
+app.get("/qr", async (req, res) => {
+  if (conectado) {
+    return res
+      .type("text/html")
+      .send("<h2>✅ WhatsApp já está conectado. Não há QR pendente.</h2>");
+  }
+
+  if (!ultimoQR) {
+    return res
+      .type("text/html")
+      .send("<h2>⏳ Nenhum QR code gerado ainda. Aguarde alguns segundos e recarregue a página.</h2>");
+  }
+
+  try {
+    const png = await qrcodePng.toBuffer(ultimoQR, { width: 320, margin: 2 });
+    res.type("image/png").send(png);
+  } catch (erro) {
+    console.log("\n❌ Erro ao gerar imagem do QR:", erro);
+    res.status(500).send("Falha ao gerar QR code.");
+  }
 });
 
 app.get("/grupos", async (req, res) => {
