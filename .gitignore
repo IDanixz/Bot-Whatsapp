@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Backup/arquivos temporários da sessão
+*.backup.gz
