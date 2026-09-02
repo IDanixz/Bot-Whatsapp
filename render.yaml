@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: divulgapromos
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /status
+    envVars:
+      - key: POST_INTERVAL_SEGUNDOS
+        value: "120"
+      - key: SHOPEE_AFFILIATE_ID
+        sync: false
+      - key: SHOPEE_API_URL
+        value: https://open-api.affiliate.shopee.com.br/graphql
+      - key: SHOPEE_APP_ID
+        sync: false
+      - key: SHOPEE_AVALIACAO_MINIMA
+        value: "4.5"
+      - key: SHOPEE_BUSCA_BRUTA
+        value: "50"
+      - key: SHOPEE_INTERVALO_PAGINAS
+        value: "0.3"
+      - key: SHOPEE_PRODUCT_LIMIT
+        value: "1"
+      - key: SHOPEE_SEARCH_KEYWORD
+        value: ""
+      - key: SHOPEE_SECRET
+        sync: false
+      - key: SHOPEE_VENDAS_MINIMAS
+        value: "1000"
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_SESSION_OBJECT
+        value: auth_info_baileys.backup.gz
+      - key: SUPABASE_STORAGE_BUCKET
+        value: whatsapp-session
+      - key: SUPABASE_URL
+        sync: false
+      - key: TERMOS_BLOQUEADOS_FEMININOS
+        value: "roupa feminina,moda feminina,biquini,bikini,maio,maiô,top feminino,top cropped,cropped,sutia,sutiã,lingerie,calcinha,calcinhas,camisola,pijama feminino,vestido,vestidos,saia,saias,short feminino,shorts feminino,body feminino,conjunto feminino,conjuntos femininos,macacao feminino,macacão feminino,blusa feminina,blusas femininas,camisa feminina,camiseta feminina,regata feminina,legging feminina,calca feminina,calça feminina,jeans feminino,moda intima feminina,moda íntima feminina,roupa intima feminina,roupa íntima feminina,conjunto intimo feminino,conjunto íntimo feminino,roupa sensual feminina"
+      - key: WHATSAPP_AUTH_FOLDER
+        value: /var/data/auth_info_baileys
+      - key: WHATSAPP_CHANNEL_LINK
+        value: "Divulga Promos https://beacons.ai/divulgapromos"
+      - key: WHATSAPP_CHANNEL_NAME
+        value: "🛍Divulga Promos"
+      - key: WHATSAPP_ENABLED
+        value: "true"
+      - key: WHATSAPP_GROUP_ID
+        sync: false

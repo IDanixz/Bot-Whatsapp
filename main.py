@@ -36,7 +36,14 @@ SHOPEE_API_URL = os.getenv(
 WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "true").lower() == "true"
 WHATSAPP_CHANNEL_NAME = os.getenv("WHATSAPP_CHANNEL_NAME", "Divulga Promos")
 WHATSAPP_CHANNEL_LINK = os.getenv("WHATSAPP_CHANNEL_LINK", "")
-WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "http://localhost:3333")
+# O Node usa a mesma PORT fornecida pelo Render.
+# Se WHATSAPP_SERVICE_URL não for definida, o Python fala com o Node
+# pela porta interna do próprio processo/container.
+RENDER_PORT = os.getenv("PORT", "3333")
+WHATSAPP_SERVICE_URL = os.getenv(
+    "WHATSAPP_SERVICE_URL",
+    f"http://127.0.0.1:{RENDER_PORT}"
+).rstrip("/")
 WHATSAPP_GROUP_ID = os.getenv("WHATSAPP_GROUP_ID", "")
 
 SHOPEE_SEARCH_KEYWORD = os.getenv("SHOPEE_SEARCH_KEYWORD", "")
@@ -389,8 +396,11 @@ def formatar_mensagem_whatsapp(produto: dict) -> str:
 
 
 def enviar_whatsapp(mensagem: str, image_url: str = ""):
+    url = f"{WHATSAPP_SERVICE_URL}/send"
+    print(f"📡 Enviando para o serviço WhatsApp: {url}")
+
     resposta = requests.post(
-        f"{WHATSAPP_SERVICE_URL}/send",
+        url,
         json={
             "group_id": WHATSAPP_GROUP_ID,
             "message": mensagem,
