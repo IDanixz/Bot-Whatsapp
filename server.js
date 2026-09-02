@@ -64,50 +64,89 @@ async function restaurarSessaoDoSupabase() {
 
   console.log("☁️ Procurando backup da sessão do WhatsApp no Supabase...");
 
-  const response = await fetch(storageUrl(), {
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
-    }
-  });
+  try {
+    const response = await fetch(storageUrl(), {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
 
-  if (response.status === 404) {
-    console.log("ℹ️ Nenhum backup encontrado. Na primeira conexão você precisará escanear o QR Code.");
+    // O Supabase Storage pode retornar 404 ou 400/NoSuchKey
+    // quando o arquivo ainda não existe.
+    if (!response.ok) {
+      const text = await response.text();
+
+      const arquivoNaoExiste =
+        response.status === 404 ||
+        (
+          response.status === 400 &&
+          (
+            text.includes("NoSuchKey") ||
+            text.includes("Object not found") ||
+            text.includes("not_found")
+          )
+        );
+
+      if (arquivoNaoExiste) {
+        console.log("ℹ️ Nenhum backup encontrado.");
+        console.log("📱 Será criada uma nova sessão. Escaneie o QR Code no WhatsApp.");
+
+        await fs.mkdir(AUTH_FOLDER, { recursive: true });
+        return false;
+      }
+
+      throw new Error(
+        `Falha ao baixar sessão do Supabase (${response.status}): ${text}`
+      );
+    }
+
+    const compressed = Buffer.from(await response.arrayBuffer());
+    const json = await gunzip(compressed);
+    const backup = JSON.parse(json.toString("utf8"));
+
+    if (!backup || backup.version !== 1 || typeof backup.files !== "object") {
+      throw new Error("Backup de sessão inválido.");
+    }
+
+    await fs.rm(AUTH_FOLDER, { recursive: true, force: true });
     await fs.mkdir(AUTH_FOLDER, { recursive: true });
-    return false;
-  }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Falha ao baixar sessão do Supabase (${response.status}): ${text}`);
-  }
+    let restored = 0;
+    const base = path.resolve(AUTH_FOLDER);
 
-  const compressed = Buffer.from(await response.arrayBuffer());
-  const json = await gunzip(compressed);
-  const backup = JSON.parse(json.toString("utf8"));
+    for (const [relative, base64] of Object.entries(backup.files)) {
+      const target = path.resolve(base, relative);
 
-  if (!backup || backup.version !== 1 || typeof backup.files !== "object") {
-    throw new Error("Backup de sessão inválido.");
-  }
+      if (!target.startsWith(base + path.sep)) {
+        throw new Error("Caminho inválido no backup da sessão.");
+      }
 
-  await fs.rm(AUTH_FOLDER, { recursive: true, force: true });
-  await fs.mkdir(AUTH_FOLDER, { recursive: true });
-
-  let restored = 0;
-  const base = path.resolve(AUTH_FOLDER);
-
-  for (const [relative, base64] of Object.entries(backup.files)) {
-    const target = path.resolve(base, relative);
-    if (!target.startsWith(base + path.sep)) {
-      throw new Error("Caminho inválido no backup da sessão.");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, Buffer.from(base64, "base64"));
+      restored++;
     }
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, Buffer.from(base64, "base64"));
-    restored++;
-  }
 
-  console.log(`✅ Sessão restaurada do Supabase (${restored} arquivos).`);
-  return true;
+    console.log(`✅ Sessão restaurada do Supabase (${restored} arquivos).`);
+    return true;
+
+  } catch (error) {
+    console.error("❌ Erro ao restaurar sessão:", error.message);
+
+    // Se o arquivo simplesmente ainda não existe,
+    // não deve derrubar o serviço.
+    if (
+      error.message.includes("NoSuchKey") ||
+      error.message.includes("Object not found") ||
+      error.message.includes("not_found")
+    ) {
+      console.log("ℹ️ Nenhuma sessão salva ainda. Iniciando uma sessão nova.");
+      await fs.mkdir(AUTH_FOLDER, { recursive: true });
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 async function salvarSessaoNoSupabase() {
