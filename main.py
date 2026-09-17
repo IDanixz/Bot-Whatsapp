@@ -97,21 +97,13 @@ def checar_configuracao():
     faltando = [k for k, v in obrigatorias.items() if not v]
 
     if faltando:
-        print("Faltam configurar estas variáveis:")
-        for nome in faltando:
-            print(f"  - {nome}")
         sys.exit(1)
 
-    if not WHATSAPP_ENABLED:
-        print("WHATSAPP_ENABLED está desligado. Ative para enviar promoções.")
-
     if WHATSAPP_ENABLED and not WHATSAPP_GROUP_ID:
-        print("WHATSAPP_GROUP_ID não foi configurado.")
         sys.exit(1)
 
     global supabase
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("Supabase conectado com sucesso.")
 
 
 # ===================== SUPABASE =====================
@@ -139,7 +131,6 @@ def carregar_historico_supabase():
 
     inicio = 0
     tamanho = 1000
-    total = 0
 
     while True:
         resposta = (
@@ -157,14 +148,10 @@ def carregar_historico_supabase():
             if produto_id:
                 postados_cache.add(str(produto_id))
 
-        total += len(linhas)
-
         if len(linhas) < tamanho:
             break
 
         inicio += tamanho
-
-    print(f"Histórico carregado do Supabase: {total} produtos.")
 
 
 def salvar_produto_postado(produto: dict):
@@ -182,7 +169,6 @@ def salvar_produto_postado(produto: dict):
         }).execute()
 
         postados_cache.add(produto_id)
-        print(f"Salvo no Supabase: {produto_id}")
 
     except Exception as e:
         texto = str(e).lower()
@@ -194,7 +180,6 @@ def salvar_produto_postado(produto: dict):
             or "23505" in texto
         ):
             postados_cache.add(produto_id)
-            print(f"Produto já estava salvo no Supabase: {produto_id}")
         else:
             raise
 
@@ -397,7 +382,6 @@ def formatar_mensagem_whatsapp(produto: dict) -> str:
 
 def enviar_whatsapp(mensagem: str, image_url: str = ""):
     url = f"{WHATSAPP_SERVICE_URL}/send"
-    print(f"📡 Enviando para o serviço WhatsApp: {url}")
 
     resposta = requests.post(
         url,
@@ -431,11 +415,8 @@ def processar_produto(produto: dict) -> bool:
     if not produto_passou_filtro(produto):
         return False
 
-    nome = produto.get("productName", "Produto")
-
     try:
         if not WHATSAPP_ENABLED:
-            print("⚠️ WhatsApp está desativado; produto não enviado.")
             return False
 
         enviar_whatsapp(
@@ -446,15 +427,9 @@ def processar_produto(produto: dict) -> bool:
         # Só registra depois que o WhatsApp confirmou o envio.
         salvar_produto_postado(produto)
 
-        print(
-            f"📲 Postado no WhatsApp: {nome} | "
-            f"vendas={produto.get('sales')} | "
-            f"avaliação={produto.get('ratingStar')}"
-        )
         return True
 
-    except Exception as e:
-        print(f"❌ Erro ao enviar para o WhatsApp '{nome}': {e}")
+    except Exception:
         return False
 
 
@@ -470,11 +445,6 @@ def rodar_uma_vez():
 
     Para cada rodada, para ao atingir SHOPEE_PRODUCT_LIMIT.
     """
-    print(
-        "Buscando produtos da Shopee "
-        "(geral/relevância, página por página)..."
-    )
-
     limite_posts = max(SHOPEE_PRODUCT_LIMIT, 1)
     postados_nesta_rodada = 0
     pagina = 1
@@ -482,54 +452,32 @@ def rodar_uma_vez():
     while True:
         try:
             produtos, page_info = buscar_pagina(pagina)
-        except Exception as e:
-            print(f"Erro ao buscar página {pagina}: {e}")
+        except Exception:
             return
 
-        print(
-            f"Página {pagina}: {len(produtos)} produtos encontrados"
-        )
-
         if not produtos:
-            print("A Shopee não retornou mais produtos.")
             break
-
-        validos = 0
-        novos = 0
 
         for produto in produtos:
             if not produto_passou_filtro(produto):
                 continue
 
-            validos += 1
             produto_id = id_do_produto(produto)
 
             if produto_id in postados_cache:
                 continue
-
-            novos += 1
 
             # POSTA IMEDIATAMENTE.
             if processar_produto(produto):
                 postados_nesta_rodada += 1
 
                 if postados_nesta_rodada >= limite_posts:
-                    print(
-                        f"Limite da rodada atingido: "
-                        f"{postados_nesta_rodada} produto(s)."
-                    )
                     return
 
                 # Pequena pausa entre posts para evitar flood.
                 time.sleep(2)
 
-        print(
-            f"Página {pagina}: {validos} passaram no filtro, "
-            f"{novos} eram novos."
-        )
-
         if not page_info.get("hasNextPage"):
-            print("Fim das páginas disponíveis nesta busca.")
             break
 
         pagina += 1
@@ -537,25 +485,13 @@ def rodar_uma_vez():
         # Pequena pausa para respeitar a API.
         time.sleep(SHOPEE_INTERVALO_PAGINAS)
 
-    if postados_nesta_rodada == 0:
-        print("Nenhum produto novo encontrado nesta rodada.")
-
 
 def rodar_continuamente():
     while True:
-        inicio = time.time()
-
         try:
             rodar_uma_vez()
-        except Exception as e:
-            print(f"Erro no ciclo de postagem: {e}")
-
-        duracao = time.time() - inicio
-
-        print(
-            f"Rodada terminada em {duracao:.1f}s. "
-            f"Aguardando {POST_INTERVAL_SEGUNDOS}s..."
-        )
+        except Exception:
+            pass
 
         time.sleep(max(POST_INTERVAL_SEGUNDOS, 1))
 
