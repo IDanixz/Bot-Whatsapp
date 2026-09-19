@@ -1,3 +1,14 @@
+"""
+Bot Shopee -> WhatsApp + Supabase (versão otimizada)
+----------------------------------------------------
+- Busca geral/relevância da Shopee.
+- Filtra: >= 1000 vendas e >= 4.5 estrelas.
+- Processa página por página: não espera terminar toda a busca.
+- Posta assim que encontra um produto válido e ainda não enviado.
+- Usa Supabase como histórico permanente.
+- Mantém servidor HTTP para Render/UptimeRobot.
+"""
+
 import os
 import sys
 import json
@@ -5,28 +16,40 @@ import time
 import hashlib
 import re
 import unicodedata
+
 import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
 
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
+
+# ===================== CONFIGURAÇÕES =====================
 
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
 SHOPEE_SECRET = os.getenv("SHOPEE_SECRET")
 SHOPEE_AFFILIATE_ID = os.getenv("SHOPEE_AFFILIATE_ID")
+
 SHOPEE_API_URL = os.getenv(
     "SHOPEE_API_URL",
     "https://open-api.affiliate.shopee.com.br/graphql"
 )
 
-WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "false").lower() == "true"
-WHATSAPP_CHANNEL_NAME = os.getenv("WHATSAPP_CHANNEL_NAME", "Divulga Promos")
-WHATSAPP_CHANNEL_LINK = os.getenv("WHATSAPP_CHANNEL_LINK", "")
+WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "true").lower() == "true"
 
+WHATSAPP_CHANNEL_NAME = os.getenv(
+    "WHATSAPP_CHANNEL_NAME",
+    "Divulga Promos"
+)
+
+WHATSAPP_CHANNEL_LINK = os.getenv(
+    "WHATSAPP_CHANNEL_LINK",
+    ""
+)
+
+# O Node usa a mesma PORT fornecida pelo Render.
+# Se WHATSAPP_SERVICE_URL não for definida, o Python fala com o Node
+# pela porta interna do próprio processo/container.
 RENDER_PORT = os.getenv("PORT", "3333")
 
 WHATSAPP_SERVICE_URL = os.getenv(
@@ -34,7 +57,10 @@ WHATSAPP_SERVICE_URL = os.getenv(
     f"http://127.0.0.1:{RENDER_PORT}"
 ).rstrip("/")
 
-WHATSAPP_GROUP_ID = os.getenv("WHATSAPP_GROUP_ID", "")
+WHATSAPP_GROUP_ID = os.getenv(
+    "WHATSAPP_GROUP_ID",
+    ""
+)
 
 SHOPEE_SEARCH_KEYWORD = os.getenv(
     "SHOPEE_SEARCH_KEYWORD",
@@ -49,38 +75,115 @@ POST_INTERVAL_SEGUNDOS = int(
     os.getenv("POST_INTERVAL_SEGUNDOS", "30")
 )
 
-MIN_VENDAS = int(
-    os.getenv("MIN_VENDAS", "1000")
+SHOPEE_VENDAS_MINIMAS = int(
+    os.getenv("SHOPEE_VENDAS_MINIMAS", "1000")
 )
 
-MIN_AVALIACAO = float(
-    os.getenv("MIN_AVALIACAO", "4.5")
+SHOPEE_AVALIACAO_MINIMA = float(
+    os.getenv("SHOPEE_AVALIACAO_MINIMA", "4.5")
 )
 
-SHOPEE_BUSCA_BRUTA = int(
-    os.getenv("SHOPEE_BUSCA_BRUTA", "50")
-)
 
-INTERVALO_PAGINAS = float(
-    os.getenv("INTERVALO_PAGINAS", "0.3")
-)
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# ==========================================================
+# FILTRO FEMININO
+# ==========================================================
+#
+# Bloqueia roupas e peças exclusivamente femininas.
+# Moda masculina continua liberada.
+#
+# Os termos podem ser alterados no .env sem mexer no código.
+#
 
 TERMOS_BLOQUEADOS_FEMININOS = [
     termo.strip()
     for termo in os.getenv(
         "TERMOS_BLOQUEADOS_FEMININOS",
-        ""
+        (
+            "roupa feminina,"
+            "roupas femininas,"
+            "moda feminina,"
+            "moda praia,"
+            "moda praia feminina,"
+            "biquini,"
+            "bikini,"
+            "maiô,"
+            "maio,"
+            "biquini feminino,"
+            "bikini feminino,"
+            "maiô feminino,"
+            "maio feminino,"
+            "roupa de banho,"
+            "roupas de banho,"
+            "roupa de praia,"
+            "roupas de praia,"
+            "saída de praia,"
+            "saida de praia,"
+            "top feminino,"
+            "top feminina,"
+            "top de academia,"
+            "top de praia,"
+            "top cropped,"
+            "cropped feminino,"
+            "cropped feminina,"
+            "lingerie,"
+            "sutiã,"
+            "sutia,"
+            "calcinha,"
+            "calcinhas,"
+            "camisola,"
+            "pijama feminino,"
+            "vestido,"
+            "vestidos,"
+            "saia,"
+            "saias,"
+            "short feminino,"
+            "shorts feminino,"
+            "body feminino,"
+            "conjunto feminino,"
+            "conjuntos femininos,"
+            "conjunto de academia feminino,"
+            "conjunto de academia,"
+            "conjunto fitness feminino,"
+            "conjunto fitness,"
+            "macacão feminino,"
+            "macacao feminino,"
+            "blusa feminina,"
+            "blusas femininas,"
+            "camisa feminina,"
+            "camiseta feminina,"
+            "regata feminina,"
+            "legging feminina,"
+            "legging fitness,"
+            "calça feminina,"
+            "calca feminina,"
+            "calça fitness,"
+            "calca fitness,"
+            "jeans feminino,"
+            "moda íntima feminina,"
+            "moda intima feminina,"
+            "roupa íntima feminina,"
+            "roupa intima feminina,"
+            "conjunto íntimo feminino,"
+            "conjunto intimo feminino,"
+            "roupa sensual feminina,"
+            "fitness feminino,"
+            "fitness feminina,"
+            "academia feminina,"
+            "roupa de academia,"
+            "roupas de academia,"
+            "short de academia,"
+            "short fitness,"
+            "roupa de praia,"
+            "roupas de praia,"
+            "conjunto de praia"
+        )
     ).split(",")
     if termo.strip()
 ]
 
-# ============================================================
-# TERMOS EXTRAS PARA FILTRO FEMININO
-# ============================================================
 
+# Termos que indicam roupa/moda feminina quando aparecem
+# junto de "feminino", "feminina" ou "mulher".
 TERMOS_ROUPA_FEMININA = [
     "roupa",
     "roupas",
@@ -110,6 +213,7 @@ TERMOS_ROUPA_FEMININA = [
     "sutiã",
     "calcinha",
     "camisola",
+    "pijama",
     "macacao",
     "macacão",
     "blusa",
@@ -119,74 +223,75 @@ TERMOS_ROUPA_FEMININA = [
     "calca",
     "calça",
     "jeans",
-    "praia",
-    "banho"
+    "intima",
+    "íntima",
+    "sensual"
 ]
 
-# ============================================================
-# SUPABASE
-# ============================================================
 
-supabase: Client = None
+# Termos que sozinhos já indicam peças femininas específicas.
+# Não dependem de aparecer "feminino" no nome.
+TERMOS_FEMININOS_DIRETOS = [
+    "biquini",
+    "bikini",
+    "maio",
+    "maiô",
+    "lingerie",
+    "sutia",
+    "sutiã",
+    "calcinha",
+    "camisola",
+    "vestido",
+    "vestidos",
+    "saia",
+    "saias"
+]
+
+
+# Quantos produtos pedir por página.
+# 50 é um bom equilíbrio entre velocidade e carga na API.
+SHOPEE_BUSCA_BRUTA = int(
+    os.getenv("SHOPEE_BUSCA_BRUTA", "50")
+)
+
+
+# Intervalo entre requisições de páginas.
+# Não deixe muito baixo para evitar rate limit da API.
+SHOPEE_INTERVALO_PAGINAS = float(
+    os.getenv("SHOPEE_INTERVALO_PAGINAS", "0.3")
+)
+
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client | None = None
+
+
+# Cache local em memória dos produtos que já foram enviados.
+# O histórico permanente continua no Supabase.
 postados_cache = set()
 
 
-# ============================================================
-# NORMALIZA TEXTO
-# ============================================================
-
-def normalizar_texto(texto):
-    if not texto:
-        return ""
-
-    texto = str(texto).lower()
-
-    texto = unicodedata.normalize(
-        "NFD",
-        texto
-    )
-
-    texto = "".join(
-        c for c in texto
-        if unicodedata.category(c) != "Mn"
-    )
-
-    texto = re.sub(r"\s+", " ", texto).strip()
-
-    return texto
-
-
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
+# ===================== CONFIGURAÇÃO =====================
 
 def checar_configuracao():
+    obrigatorias = {
+        "SHOPEE_APP_ID": SHOPEE_APP_ID,
+        "SHOPEE_SECRET": SHOPEE_SECRET,
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_KEY": SUPABASE_KEY,
+    }
 
-    global supabase
+    faltando = [k for k, v in obrigatorias.items() if not v]
 
-    erros = []
-
-    if not SHOPEE_APP_ID:
-        erros.append("SHOPEE_APP_ID")
-
-    if not SHOPEE_SECRET:
-        erros.append("SHOPEE_SECRET")
-
-    if not SUPABASE_URL:
-        erros.append("SUPABASE_URL")
-
-    if not SUPABASE_KEY:
-        erros.append("SUPABASE_KEY")
+    if faltando:
+        sys.exit(1)
 
     if WHATSAPP_ENABLED and not WHATSAPP_GROUP_ID:
-        erros.append("WHATSAPP_GROUP_ID")
-
-    if erros:
-        print(
-            "❌ Variáveis ausentes:",
-            ", ".join(erros)
-        )
         sys.exit(1)
+
+    global supabase
 
     supabase = create_client(
         SUPABASE_URL,
@@ -194,136 +299,317 @@ def checar_configuracao():
     )
 
 
-# ============================================================
-# HISTÓRICO
-# ============================================================
+# ===================== SUPABASE =====================
+
+def id_do_produto(produto: dict) -> str:
+    """ID estável. Primeiro usa itemId da Shopee."""
+
+    if produto.get("itemId") is not None:
+        return str(produto["itemId"])
+
+    return str(
+        produto.get("offerLink")
+        or produto.get("productName", "")
+    ).strip()
+
 
 def carregar_historico_supabase():
+    """
+    Carrega os IDs já enviados para a memória.
+    Faz paginação para não depender de um limite pequeno de linhas.
+    """
 
     global postados_cache
 
-    postados_cache = set()
+    if not supabase:
+        raise RuntimeError(
+            "Supabase não foi inicializado."
+        )
 
-    try:
+    inicio = 0
+    tamanho = 1000
 
-        inicio = 0
+    while True:
 
-        while True:
-
-            fim = inicio + 999
-
-            resposta = (
-                supabase
-                .table("produtos_postados")
-                .select("produto_id")
-                .range(inicio, fim)
-                .execute()
+        resposta = (
+            supabase
+            .table("produtos_postados")
+            .select("produto_id")
+            .range(
+                inicio,
+                inicio + tamanho - 1
             )
-
-            dados = resposta.data or []
-
-            for item in dados:
-
-                produto_id = item.get("produto_id")
-
-                if produto_id:
-                    postados_cache.add(
-                        str(produto_id)
-                    )
-
-            if len(dados) < 1000:
-                break
-
-            inicio += 1000
-
-        print(
-            f"📚 Histórico carregado: {len(postados_cache)} produtos"
+            .execute()
         )
 
-    except Exception as e:
+        linhas = resposta.data or []
 
-        print(
-            "⚠️ Erro ao carregar histórico:",
-            e
+        for linha in linhas:
+            produto_id = linha.get("produto_id")
+
+            if produto_id:
+                postados_cache.add(
+                    str(produto_id)
+                )
+
+        if len(linhas) < tamanho:
+            break
+
+        inicio += tamanho
+
+
+def salvar_produto_postado(produto: dict):
+    """Salva depois que o WhatsApp confirmou o envio."""
+
+    if not supabase:
+        raise RuntimeError(
+            "Supabase não foi inicializado."
         )
 
-
-def produto_ja_postado(produto_id):
-
-    return str(produto_id) in postados_cache
-
-
-def salvar_produto_postado(produto_id, link):
+    produto_id = id_do_produto(produto)
+    link = produto.get("offerLink") or ""
 
     try:
 
         supabase.table(
             "produtos_postados"
         ).insert({
-            "produto_id": str(produto_id),
-            "link": link
+            "produto_id": produto_id,
+            "link": link,
         }).execute()
 
-        postados_cache.add(
-            str(produto_id)
-        )
-
-        return True
+        postados_cache.add(produto_id)
 
     except Exception as e:
 
         texto = str(e).lower()
 
+        # UNIQUE evita duplicação mesmo em caso de corrida/reexecução.
         if (
             "duplicate" in texto
             or "unique" in texto
             or "23505" in texto
         ):
-            postados_cache.add(
-                str(produto_id)
-            )
+            postados_cache.add(produto_id)
 
-            return True
+        else:
+            raise
 
-        print(
-            "⚠️ Erro ao salvar histórico:",
-            e
+
+# ===================== SHOPEE =====================
+
+def gerar_assinatura(payload: str):
+
+    timestamp = int(time.time())
+
+    base_string = (
+        f"{SHOPEE_APP_ID}"
+        f"{timestamp}"
+        f"{payload}"
+        f"{SHOPEE_SECRET}"
+    )
+
+    assinatura = hashlib.sha256(
+        base_string.encode("utf-8")
+    ).hexdigest()
+
+    return assinatura, timestamp
+
+
+QUERY_PRODUTOS = """
+query productOfferV2($keyword: String, $page: Int, $limit: Int, $sortType: Int) {
+  productOfferV2(
+    keyword: $keyword,
+    page: $page,
+    limit: $limit,
+    sortType: $sortType
+  ) {
+    nodes {
+      itemId
+      productName
+      priceMin
+      priceMax
+      priceDiscountRate
+      sales
+      ratingStar
+      offerLink
+      imageUrl
+    }
+    pageInfo {
+      page
+      limit
+      hasNextPage
+    }
+  }
+}
+"""
+
+
+def buscar_pagina(pagina: int):
+    """Busca UMA página. Assim podemos filtrar/postar antes da próxima."""
+
+    limite = min(
+        max(SHOPEE_BUSCA_BRUTA, 1),
+        500
+    )
+
+    variables = {
+        "keyword": SHOPEE_SEARCH_KEYWORD or None,
+        "page": pagina,
+        "limit": limite,
+        "sortType": 1,
+    }
+
+    body = {
+        "query": QUERY_PRODUTOS,
+        "variables": variables,
+    }
+
+    payload = json.dumps(
+        body,
+        separators=(",", ":")
+    )
+
+    assinatura, timestamp = gerar_assinatura(
+        payload
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": (
+            f"SHA256 Credential={SHOPEE_APP_ID}, "
+            f"Timestamp={timestamp}, "
+            f"Signature={assinatura}"
+        ),
+    }
+
+    resposta = requests.post(
+        SHOPEE_API_URL,
+        headers=headers,
+        data=payload,
+        timeout=30,
+    )
+
+    resposta.raise_for_status()
+
+    dados = resposta.json()
+
+    if dados.get("errors"):
+        raise Exception(
+            "Erro retornado pela API da Shopee: "
+            f"{dados['errors']}"
         )
 
-        return False
+    resultado = dados["data"]["productOfferV2"]
+
+    return (
+        resultado.get("nodes") or [],
+        resultado.get("pageInfo") or {},
+    )
 
 
-# ============================================================
-# FILTRO FEMININO
-# ============================================================
+# ===================== FILTRO FEMININO =====================
 
-def produto_feminino(nome):
+def normalizar_texto(texto) -> str:
+    """Minúsculas + sem acentos, para o filtro pegar variações do título."""
 
-    texto = normalizar_texto(nome)
+    texto = str(texto or "").lower()
 
-    # --------------------------------------------------------
-    # 1. Termos colocados diretamente no .env
-    # --------------------------------------------------------
+    texto = unicodedata.normalize(
+        "NFD",
+        texto
+    )
+
+    texto = "".join(
+        c
+        for c in texto
+        if unicodedata.category(c) != "Mn"
+    )
+
+    texto = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        texto
+    )
+
+    return f" {texto.strip()} "
+
+
+def produto_e_feminino_bloqueado(
+    produto: dict
+) -> bool:
+    """
+    Retorna True para roupas/peças femininas
+    que não devem ser postadas.
+
+    Também bloqueia categorias como:
+    - fitness feminino
+    - academia feminina
+    - praia
+    - biquíni
+    - maiô
+    - vestido
+    - saia
+    - lingerie
+    etc.
+    """
+
+    nome = normalizar_texto(
+        produto.get("productName", "")
+    )
+
+    # ------------------------------------------------------
+    # 1. Primeiro verifica todos os termos configurados
+    # no .env.
+    # ------------------------------------------------------
 
     for termo in TERMOS_BLOQUEADOS_FEMININOS:
 
-        termo_normalizado = normalizar_texto(termo)
+        termo_normalizado = normalizar_texto(
+            termo
+        ).strip()
 
         if (
             termo_normalizado
-            and termo_normalizado in texto
+            and termo_normalizado in nome
         ):
             return True
 
-    # --------------------------------------------------------
-    # 2. Filtro inteligente:
+    # ------------------------------------------------------
+    # 2. Peças que são femininas por natureza.
+    # Não precisa aparecer "feminino" no nome.
+    # ------------------------------------------------------
+
+    for termo in TERMOS_FEMININOS_DIRETOS:
+
+        termo_normalizado = normalizar_texto(
+            termo
+        ).strip()
+
+        if (
+            termo_normalizado
+            and termo_normalizado in nome
+        ):
+            return True
+
+    # ------------------------------------------------------
+    # 3. Se o nome indicar feminino/feminina/mulher,
+    # verifica se também é uma peça de roupa.
     #
-    # feminino/feminina + qualquer termo de roupa
-    # --------------------------------------------------------
+    # Exemplos:
+    #
+    # "Conjunto Fitness Feminino"
+    # "Top Esportivo Feminino"
+    # "Short Feminino"
+    # "Legging Feminina"
+    # "Roupa de Academia Feminina"
+    # ------------------------------------------------------
 
     feminino = (
-        "feminino" in texto
-        or "feminina" in texto
+        " feminino " in nome
+        or " feminina " in nome
+        or " mulher " in nome
+        or " mulheres " in nome
     )
 
     if feminino:
@@ -332,223 +618,154 @@ def produto_feminino(nome):
 
             termo_normalizado = normalizar_texto(
                 termo
-            )
+            ).strip()
 
-            if termo_normalizado in texto:
+            if (
+                termo_normalizado
+                and termo_normalizado in nome
+            ):
                 return True
-
-    # --------------------------------------------------------
-    # 3. Combinações específicas que costumam escapar
-    # --------------------------------------------------------
-
-    combinacoes = [
-
-        "conjunto feminino",
-        "conjuntos feminino",
-        "conjunto feminina",
-        "conjuntos feminina",
-
-        "roupa feminino",
-        "roupa feminina",
-        "roupas feminina",
-        "roupas femininas",
-
-        "moda feminino",
-        "moda feminina",
-
-        "fitness feminino",
-        "fitness feminina",
-
-        "academia feminino",
-        "academia feminina",
-
-        "praia feminino",
-        "praia feminina",
-
-        "banho feminino",
-        "banho feminina",
-
-        "top feminino",
-        "top feminina",
-
-        "short feminino",
-        "shorts feminino",
-
-        "legging feminino",
-        "legging feminina",
-
-        "calca feminino",
-        "calca feminina",
-
-        "vestido feminino",
-        "vestido feminina"
-    ]
-
-    for combinacao in combinacoes:
-
-        if normalizar_texto(combinacao) in texto:
-            return True
 
     return False
 
 
-# ============================================================
-# FILTRO PRINCIPAL
-# ============================================================
+def produto_passou_filtro(
+    produto: dict
+) -> bool:
 
-def produto_passou_filtro(produto):
+    # Primeiro remove roupas e peças femininas,
+    # inclusive biquíni, sutiã, calcinha, camisola,
+    # vestido, saia, cropped, fitness, academia etc.
 
-    nome = produto.get(
-        "productName",
-        ""
-    )
-
-    vendas = int(
-        produto.get("sales", 0) or 0
-    )
-
-    avaliacao = float(
-        produto.get("rating", 0) or 0
-    )
-
-    # --------------------------------------------------------
-    # BLOQUEIO FEMININO
-    # --------------------------------------------------------
-
-    if produto_feminino(nome):
-
+    if produto_e_feminino_bloqueado(produto):
         return False
 
-    # --------------------------------------------------------
-    # VENDAS
-    # --------------------------------------------------------
+    try:
 
-    if vendas < MIN_VENDAS:
+        vendas = float(
+            produto.get("sales") or 0
+        )
 
-        return False
+        avaliacao = float(
+            produto.get("ratingStar") or 0
+        )
 
-    # --------------------------------------------------------
-    # AVALIAÇÃO
-    # --------------------------------------------------------
-
-    if avaliacao < MIN_AVALIACAO:
+    except (TypeError, ValueError):
 
         return False
-
-    return True
-
-
-# ============================================================
-# ASSINATURA SHOPEE
-# ============================================================
-
-def gerar_assinatura(payload):
-
-    timestamp = int(time.time())
-
-    body = json.dumps(
-        payload,
-        separators=(",", ":"),
-        ensure_ascii=False
-    )
-
-    assinatura = hashlib.sha256(
-        (
-            SHOPEE_APP_ID
-            + str(timestamp)
-            + body
-            + SHOPEE_SECRET
-        ).encode()
-    ).hexdigest()
-
-    return timestamp, assinatura
-
-
-# ============================================================
-# BUSCA SHOPEE
-# ============================================================
-
-def buscar_produtos(keyword, page):
-
-    query = """
-    query {
-        productOfferV2(
-            keyword: "%s",
-            limit: %s,
-            page: %s
-        ) {
-            nodes {
-                itemId
-                productName
-                priceMin
-                priceMax
-                discount
-                sales
-                rating
-                offerLink
-                imageUrl
-            }
-        }
-    }
-    """ % (
-        keyword.replace('"', '\\"'),
-        SHOPEE_BUSCA_BRUTA,
-        page
-    )
-
-    payload = {
-        "query": query
-    }
-
-    timestamp, assinatura = gerar_assinatura(
-        payload
-    )
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"SHA256 Credential={SHOPEE_APP_ID}, Timestamp={timestamp}, Signature={assinatura}"
-    }
-
-    resposta = requests.post(
-        SHOPEE_API_URL,
-        headers=headers,
-        json=payload,
-        timeout=30
-    )
-
-    resposta.raise_for_status()
-
-    dados = resposta.json()
 
     return (
-        dados
-        .get("data", {})
-        .get("productOfferV2", {})
-        .get("nodes", [])
+        vendas >= SHOPEE_VENDAS_MINIMAS
+        and
+        avaliacao >= SHOPEE_AVALIACAO_MINIMA
     )
 
 
-# ============================================================
-# FORMATA PRODUTO
-# ============================================================
+# ===================== FORMATAÇÃO =====================
 
-def formatar_produto(produto):
+def _para_float(
+    valor,
+    padrao=0.0
+):
+
+    try:
+        return float(valor)
+
+    except (TypeError, ValueError):
+
+        return padrao
+
+
+def formatar_valor_brl(
+    valor: float
+) -> str:
+
+    return f"R$ {valor:.2f}".replace(
+        ".",
+        ","
+    )
+
+
+def calcular_precos(produto: dict):
+
+    preco_atual = _para_float(
+        produto.get("priceMin")
+        or produto.get("priceMax")
+        or 0
+    )
+
+    taxa_desconto = _para_float(
+        produto.get("priceDiscountRate")
+    )
+
+    preco_original = None
+    percentual = 0
+
+    if 0 < taxa_desconto < 100:
+
+        preco_original = (
+            preco_atual
+            /
+            (1 - taxa_desconto / 100)
+        )
+
+        percentual = round(
+            taxa_desconto
+        )
+
+    return (
+        preco_atual,
+        preco_original,
+        percentual
+    )
+
+
+# ===================== WHATSAPP =====================
+# (via serviço Node.js/Baileys)
+
+def formatar_bloco_preco_texto(
+    produto: dict
+) -> str:
+
+    (
+        preco_atual,
+        preco_original,
+        percentual
+    ) = calcular_precos(produto)
+
+    preco_atual_fmt = formatar_valor_brl(
+        preco_atual
+    )
+
+    if (
+        preco_original
+        and percentual > 0
+    ):
+
+        preco_original_fmt = formatar_valor_brl(
+            preco_original
+        )
+
+        return (
+            f"~{preco_original_fmt}~ 🏷️ "
+            f"-{percentual}% OFF\n"
+            f"💵 *{preco_atual_fmt}*"
+        )
+
+    return f"💵 *{preco_atual_fmt}*"
+
+
+def formatar_mensagem_whatsapp(
+    produto: dict
+) -> str:
 
     nome = produto.get(
         "productName",
         "Produto"
     )
 
-    preco_min = float(
-        produto.get("priceMin", 0) or 0
-    )
-
-    preco_max = float(
-        produto.get("priceMax", 0) or 0
-    )
-
-    desconto = float(
-        produto.get("discount", 0) or 0
+    bloco_preco = formatar_bloco_preco_texto(
+        produto
     )
 
     link = produto.get(
@@ -556,231 +773,203 @@ def formatar_produto(produto):
         ""
     )
 
-    if preco_max > preco_min:
-        preco_original = preco_max
-    else:
-        preco_original = 0
+    partes = [
+        f"🔥 *{nome}*",
+        bloco_preco,
+        f"🔗 {link}",
+    ]
 
-    if desconto > 0:
-
-        preco_atual = (
-            preco_original
-            * (1 - desconto / 100)
+    if WHATSAPP_CHANNEL_NAME:
+        partes.append(
+            WHATSAPP_CHANNEL_NAME
         )
 
-    else:
-
-        preco_atual = preco_min
-
-    mensagem = f"""🔥 *{nome}*
-
-"""
-
-    if preco_original > preco_atual:
-
-        mensagem += (
-            f"~R$ {preco_original:.2f}~ "
-            f"🏷️ -{desconto:.0f}% OFF\n"
+    if WHATSAPP_CHANNEL_LINK:
+        partes.append(
+            WHATSAPP_CHANNEL_LINK
         )
 
-    mensagem += (
-        f"💵 *R$ {preco_atual:.2f}*\n\n"
-        f"🔗 {link}\n\n"
-        f"{WHATSAPP_CHANNEL_NAME}\n"
-        f"{WHATSAPP_CHANNEL_LINK}\n\n"
-        f"#Anuncio #DivulgaPromos"
+    partes.append(
+        "#Anuncio #DivulgaPromos"
     )
 
-    return mensagem
+    return "\n\n".join(partes)
 
 
-# ============================================================
-# ENVIA WHATSAPP
-# ============================================================
+def enviar_whatsapp(
+    mensagem: str,
+    image_url: str = ""
+):
 
-def enviar_whatsapp(mensagem, imagem_url):
-
-    if not WHATSAPP_ENABLED:
-        return False
-
-    payload = {
-        "group_id": WHATSAPP_GROUP_ID,
-        "message": mensagem,
-        "image_url": imagem_url
-    }
+    url = (
+        f"{WHATSAPP_SERVICE_URL}/send"
+    )
 
     resposta = requests.post(
-        f"{WHATSAPP_SERVICE_URL}/send",
-        json=payload,
-        timeout=60
+        url,
+        json={
+            "group_id": WHATSAPP_GROUP_ID,
+            "message": mensagem,
+            "image_url": image_url or "",
+        },
+        timeout=60,
     )
 
     resposta.raise_for_status()
 
-    return True
+    return resposta.json()
 
 
-# ============================================================
-# PROCESSA PRODUTO
-# ============================================================
+# ===================== RENDER / UPTIMEROBOT =====================
+#
+# O health check e o QR code agora são servidos pelo server.js (Node),
+# que já ocupa a porta $PORT do Render.
+#
+# Manter um segundo servidor HTTP aqui no Python causava
+# "Address already in use" e crashava o serviço.
 
-def processar_produto(produto):
+
+# ===================== PROCESSAMENTO OTIMIZADO =====================
+
+def processar_produto(
+    produto: dict
+) -> bool:
+
+    """Tenta enviar UM produto para o WhatsApp."""
+
+    produto_id = id_do_produto(
+        produto
+    )
+
+    if produto_id in postados_cache:
+        return False
+
+    if not produto_passou_filtro(
+        produto
+    ):
+        return False
 
     try:
 
-        produto_id = produto.get(
-            "itemId"
-        )
-
-        nome = produto.get(
-            "productName",
-            ""
-        )
-
-        if not produto_id:
+        if not WHATSAPP_ENABLED:
             return False
-
-        if produto_ja_postado(produto_id):
-            return False
-
-        if not produto_passou_filtro(produto):
-            return False
-
-        mensagem = formatar_produto(
-            produto
-        )
-
-        imagem_url = produto.get(
-            "imageUrl",
-            ""
-        )
-
-        print(
-            f"🔥 Postando: {nome}"
-        )
 
         enviar_whatsapp(
-            mensagem,
-            imagem_url
+            formatar_mensagem_whatsapp(
+                produto
+            ),
+            produto.get("imageUrl") or "",
         )
 
+        # Só registra depois que o WhatsApp confirmou o envio.
         salvar_produto_postado(
-            produto_id,
-            produto.get("offerLink", "")
-        )
-
-        print(
-            "✅ Produto enviado"
+            produto
         )
 
         return True
 
-    except Exception as e:
-
-        print(
-            f"⚠️ Erro no produto: {e}"
-        )
+    except Exception:
 
         return False
 
 
-# ============================================================
-# UMA RODADA
-# ============================================================
-
 def rodar_uma_vez():
 
-    enviados = 0
+    """
+    Otimização principal:
+
+    Antes:
+      TODAS as páginas -> filtro -> Supabase -> posts.
+
+    Agora:
+      página -> filtro -> posta imediatamente -> próxima página.
+
+    Para cada rodada, para ao atingir SHOPEE_PRODUCT_LIMIT.
+    """
+
+    limite_posts = max(
+        SHOPEE_PRODUCT_LIMIT,
+        1
+    )
+
+    postados_nesta_rodada = 0
     pagina = 1
 
-    while enviados < SHOPEE_PRODUCT_LIMIT:
+    while True:
 
         try:
 
-            produtos = buscar_produtos(
-                SHOPEE_SEARCH_KEYWORD,
+            produtos, page_info = buscar_pagina(
                 pagina
             )
 
-        except Exception as e:
+        except Exception:
 
-            print(
-                f"⚠️ Erro na página {pagina}: {e}"
-            )
-
-            break
+            return
 
         if not produtos:
             break
 
         for produto in produtos:
 
-            if enviados >= SHOPEE_PRODUCT_LIMIT:
-                break
+            if not produto_passou_filtro(
+                produto
+            ):
+                continue
 
-            sucesso = processar_produto(
+            produto_id = id_do_produto(
                 produto
             )
 
-            if sucesso:
+            if produto_id in postados_cache:
+                continue
 
-                enviados += 1
+            # POSTA IMEDIATAMENTE.
+            if processar_produto(produto):
 
-                # INTERVALO GLOBAL ENTRE POSTS
+                postados_nesta_rodada += 1
+
                 if (
-                    enviados
-                    < SHOPEE_PRODUCT_LIMIT
+                    postados_nesta_rodada
+                    >= limite_posts
                 ):
-                    print(
-                        f"⏳ Aguardando {POST_INTERVAL_SEGUNDOS}s..."
-                    )
+                    return
 
-                    time.sleep(
-                        POST_INTERVAL_SEGUNDOS
-                    )
+                # Pequena pausa entre posts para evitar flood.
+                time.sleep(2)
+
+        if not page_info.get(
+            "hasNextPage"
+        ):
+            break
 
         pagina += 1
 
+        # Pequena pausa para respeitar a API.
         time.sleep(
-            INTERVALO_PAGINAS
+            SHOPEE_INTERVALO_PAGINAS
         )
 
-    print(
-        f"🏁 Rodada finalizada: {enviados} enviados"
-    )
-
-
-# ============================================================
-# LOOP
-# ============================================================
 
 def rodar_continuamente():
 
     while True:
 
         try:
-
             rodar_uma_vez()
 
-        except Exception as e:
-
-            print(
-                "⚠️ Erro na rodada:",
-                e
-            )
-
-        print(
-            "🔄 Nova rodada..."
-        )
+        except Exception:
+            pass
 
         time.sleep(
-            POST_INTERVAL_SEGUNDOS
+            max(
+                POST_INTERVAL_SEGUNDOS,
+                1
+            )
         )
 
 
-# ============================================================
-# MAIN
-# ============================================================
+# ===================== MAIN =====================
 
 if __name__ == "__main__":
 
@@ -788,4 +977,8 @@ if __name__ == "__main__":
 
     carregar_historico_supabase()
 
-    rodar_continuamente()
+    if "--loop" in sys.argv:
+        rodar_continuamente()
+
+    else:
+        rodar_uma_vez()
